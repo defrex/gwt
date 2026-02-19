@@ -4,15 +4,18 @@ Git worktree manager. Creates worktrees as sibling directories and manages their
 
 ## Installation
 
+Clone the repo, then symlink the executable and shell wrapper:
+
 ```bash
 # Make executable
-chmod +x ~/code/gwt/gwt
+chmod +x gwt
 
-# Add to PATH
-ln -sf ~/code/gwt/gwt ~/bin/gwt
+# Add to PATH (ensure ~/bin is in your PATH)
+ln -sf "$(pwd)/gwt" ~/bin/gwt
 
 # Shell wrapper (enables cd into new worktrees)
-ln -sf ~/code/gwt/gwt.sh ~/.zshrc.d/gwt.sh
+# Source this from your .zshrc or equivalent
+ln -sf "$(pwd)/gwt.sh" ~/.zshrc.d/gwt.sh
 ```
 
 Then restart your shell or `source ~/.zshrc`.
@@ -35,17 +38,17 @@ Creates a new worktree for `<branch>` as a sibling directory named `<project>-<b
 If a worktree already exists for the branch, switches to it instead.
 
 ```bash
-# From ~/code/myapp (main worktree)
+# From your main worktree (e.g. myapp/)
 gwt feat/login
-# Creates ~/code/myapp-feat-login and cd's into it
+# Creates ../myapp-feat-login and cd's into it
 
 gwt add fix/typo
-# Creates ~/code/myapp-fix-typo and cd's into it
+# Creates ../myapp-fix-typo and cd's into it
 
 # Also works from inside a secondary worktree
-cd ~/code/myapp-feat-login
+cd ../myapp-feat-login
 gwt fix/typo
-# Still creates ~/code/myapp-fix-typo (derives project root from git)
+# Still creates ../myapp-fix-typo (derives project root from git)
 ```
 
 ### `gwt ls`
