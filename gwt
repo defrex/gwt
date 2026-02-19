@@ -1,0 +1,268 @@
+#!/bin/bash
+set -euo pipefail
+
+# gwt - Git worktree manager
+# All informational output goes to stderr. Only the worktree path (from add) goes to stdout.
+
+VERSION="1.0.0"
+
+# --- Utility functions ---
+
+die() { echo "error: $*" >&2; exit 1; }
+info() { echo "$*" >&2; }
+warn() { echo "warning: $*" >&2; }
+
+# --- Git helpers ---
+
+require_git_repo() {
+    git rev-parse --git-dir >/dev/null 2>&1 || die "not a git repository"
+}
+
+get_main_worktree() {
+    git worktree list --porcelain | head -1 | cut -d' ' -f2
+}
+
+get_default_branch() {
+    if git rev-parse --verify main >/dev/null 2>&1; then
+        echo "main"
+    elif git rev-parse --verify master >/dev/null 2>&1; then
+        echo "master"
+    else
+        die "neither 'main' nor 'master' branch found"
+    fi
+}
+
+# --- Subcommands ---
+
+cmd_add() {
+    case "${1:-}" in
+        -h|--help)
+            cat >&2 <<'EOF'
+Usage: gwt add <branch>
+       gwt <branch>
+
+Create a new worktree for <branch>, or switch to it if it already exists.
+The worktree is created as a sibling directory named <project>-<branch>.
+
+If the branch exists, it is checked out. Otherwise a new branch is created
+from the default branch (main/master).
+
+If worktree-init.sh exists in the main worktree, it is copied into the new
+worktree and executed.
+
+Prints the worktree path to stdout (for shell wrapper cd integration).
+EOF
+            return 0
+            ;;
+        "") die "branch name required\nUsage: gwt add <branch>" ;;
+    esac
+
+    local branch_name
+    branch_name=$(echo "$1" | tr '[:upper:]' '[:lower:]')
+    local safe_name="${branch_name//\//-}"
+
+    local main_worktree
+    main_worktree=$(get_main_worktree)
+    local project_dir
+    project_dir=$(basename "$main_worktree")
+    local parent_dir
+    parent_dir=$(dirname "$main_worktree")
+    local worktree_dir="${parent_dir}/${project_dir}-${safe_name}"
+
+    # Check if a worktree already exists for this branch
+    local existing_worktree
+    existing_worktree=$(git worktree list --porcelain | grep -A 2 "branch refs/heads/$branch_name" | grep "^worktree " | cut -d' ' -f2 || true)
+    if [ -n "$existing_worktree" ]; then
+        info "Worktree already exists for branch '$branch_name' at: $existing_worktree"
+        echo "$existing_worktree"
+        return 0
+    fi
+
+    local default_branch
+    default_branch=$(get_default_branch)
+
+    # Create the worktree
+    if git rev-parse --verify "$branch_name" >/dev/null 2>&1; then
+        info "Branch '$branch_name' already exists, checking it out in new worktree"
+        git worktree add "$worktree_dir" "$branch_name" >&2
+    else
+        info "Creating new branch '$branch_name' from $default_branch"
+        git worktree add -b "$branch_name" "$worktree_dir" "$default_branch" >&2
+    fi
+
+    # Copy and run worktree-init.sh
+    if [ -f "$main_worktree/worktree-init.sh" ]; then
+        cp "$main_worktree/worktree-init.sh" "$worktree_dir/worktree-init.sh"
+        info "Running worktree-init.sh..."
+        (cd "$worktree_dir" && ./worktree-init.sh) >&2
+    else
+        warn "No worktree-init.sh found in main worktree. Skipping project setup."
+    fi
+
+    # Set terminal title (goes to tty, not stdout)
+    echo -ne "\033]0;${project_dir}-${safe_name}\007" >/dev/tty 2>/dev/null || true
+
+    # Print path to stdout for the shell wrapper to cd into
+    echo "$worktree_dir"
+}
+
+cmd_ls() {
+    case "${1:-}" in
+        -h|--help)
+            cat >&2 <<'EOF'
+Usage: gwt ls
+
+List all worktrees for the current project. Shows the worktree path,
+branch name, and HEAD commit for each.
+EOF
+            return 0
+            ;;
+    esac
+
+    git worktree list
+}
+
+cmd_rm() {
+    case "${1:-}" in
+        -h|--help)
+            cat >&2 <<'EOF'
+Usage: gwt rm <name>
+
+Remove a worktree by branch name. The worktree directory is removed and
+the local branch is deleted if it has been pushed to the remote.
+EOF
+            return 0
+            ;;
+        "") die "branch name required\nUsage: gwt rm <name>" ;;
+    esac
+
+    local branch_name="$1"
+    local safe_name="${branch_name//\//-}"
+
+    local main_worktree
+    main_worktree=$(get_main_worktree)
+    local project_dir
+    project_dir=$(basename "$main_worktree")
+    local parent_dir
+    parent_dir=$(dirname "$main_worktree")
+    local worktree_dir="${parent_dir}/${project_dir}-${safe_name}"
+
+    if [ ! -d "$worktree_dir" ]; then
+        die "worktree not found: $worktree_dir"
+    fi
+
+    info "Removing worktree: $worktree_dir"
+    git worktree remove "$worktree_dir" --force
+
+    # Only delete local branch if it has been pushed to remote
+    if git ls-remote --heads origin "$branch_name" 2>/dev/null | grep -q "$branch_name"; then
+        info "Branch $branch_name exists on remote, deleting local branch"
+        git branch -d "$branch_name" 2>/dev/null || true
+    else
+        info "Branch $branch_name not pushed to remote, keeping local branch"
+    fi
+}
+
+cmd_clean() {
+    local dry_run=false
+    case "${1:-}" in
+        -h|--help)
+            cat >&2 <<'EOF'
+Usage: gwt clean [--dry-run]
+
+Remove worktrees whose branches have merged PRs on GitHub.
+Requires the GitHub CLI (gh) to be installed.
+
+Options:
+  --dry-run    Show what would be removed without removing anything
+EOF
+            return 0
+            ;;
+        --dry-run) dry_run=true ;;
+    esac
+
+    if ! command -v gh >/dev/null 2>&1; then
+        die "GitHub CLI (gh) is required for clean"
+    fi
+
+    local main_worktree
+    main_worktree=$(get_main_worktree)
+    local project_dir
+    project_dir=$(basename "$main_worktree")
+    local default_branch
+    default_branch=$(get_default_branch)
+
+    git worktree list --porcelain | grep -E "^worktree " | while read -r line; do
+        local worktree_path
+        worktree_path=$(echo "$line" | cut -d' ' -f2)
+        local worktree_name
+        worktree_name=$(basename "$worktree_path")
+
+        # Skip if not a project worktree or if it's the main worktree
+        if [[ "$worktree_name" != "$project_dir-"* ]] || [[ "$worktree_path" == "$main_worktree" ]]; then
+            continue
+        fi
+
+        local branch_name
+        branch_name=$(git -C "$worktree_path" branch --show-current 2>/dev/null || true)
+
+        if [ -z "$branch_name" ] || [ "$branch_name" = "$default_branch" ]; then
+            continue
+        fi
+
+        local pr_state
+        pr_state=$(gh pr list --state merged --head "$branch_name" --json state --jq '.[0].state' 2>/dev/null || true)
+
+        if [ "$pr_state" = "MERGED" ]; then
+            if $dry_run; then
+                info "[dry-run] Would remove: $worktree_name (branch: $branch_name - PR merged)"
+            else
+                info "Removing merged worktree: $worktree_name (branch: $branch_name)"
+                git worktree remove "$worktree_path" --force
+                git branch -d "$branch_name" 2>/dev/null || true
+            fi
+        else
+            info "Skipping: $worktree_name (branch: $branch_name - no merged PR)"
+        fi
+    done
+}
+
+# --- Help ---
+
+show_help() {
+    cat >&2 <<'EOF'
+gwt - Git worktree manager
+
+Usage:
+  gwt <branch>            Create/switch to a worktree (shorthand for 'add')
+  gwt add <branch>        Create/switch to a worktree
+  gwt ls                  List project worktrees
+  gwt rm <name>           Remove a worktree
+  gwt clean [--dry-run]   Remove worktrees with merged PRs
+  gwt help                Show this help
+
+Options:
+  -h, --help              Show help (also works per-subcommand)
+  --version               Show version
+
+Shell integration:
+  Source gwt.sh in your shell to enable automatic cd into new worktrees.
+  See README.md for installation instructions.
+EOF
+}
+
+# --- Main dispatch ---
+
+require_git_repo
+
+case "${1:-}" in
+    "")         show_help; exit 1 ;;
+    -h|--help|help)  show_help ;;
+    --version)  echo "gwt $VERSION" >&2 ;;
+    add)        shift; cmd_add "$@" ;;
+    ls)         shift; cmd_ls "$@" ;;
+    rm)         shift; cmd_rm "$@" ;;
+    clean)      shift; cmd_clean "$@" ;;
+    -*)         die "unknown option: $1" ;;
+    *)          cmd_add "$@" ;;  # implicit add
+esac
