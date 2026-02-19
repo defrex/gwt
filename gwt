@@ -86,8 +86,10 @@ EOF
         info "Branch '$branch_name' already exists, checking it out in new worktree"
         git worktree add "$worktree_dir" "$branch_name" >&2
     else
-        info "Creating new branch '$branch_name' from $default_branch"
-        git worktree add -b "$branch_name" "$worktree_dir" "$default_branch" >&2
+        info "Fetching latest $default_branch..."
+        git fetch origin "$default_branch" >&2
+        info "Creating new branch '$branch_name' from origin/$default_branch"
+        git worktree add -b "$branch_name" "$worktree_dir" "origin/$default_branch" >&2
     fi
 
     # Copy and run worktree-init.sh
