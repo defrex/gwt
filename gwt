@@ -165,12 +165,14 @@ EOF
         local worktree_dir="${parent_dir}/${project_dir}-${safe_name}"
 
         if [ ! -d "$worktree_dir" ]; then
-            warn "worktree not found: $worktree_dir"
-            continue
+            if ! $force; then
+                warn "worktree not found: $worktree_dir"
+                continue
+            fi
+        else
+            info "Removing worktree: $worktree_dir"
+            git worktree remove "$worktree_dir" --force
         fi
-
-        info "Removing worktree: $worktree_dir"
-        git worktree remove "$worktree_dir" --force
 
         if $force; then
             info "Force-deleting local branch $branch_name"

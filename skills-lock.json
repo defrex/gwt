@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "permission-policy": {
+      "source": "defrex/claude-code-permission-policy",
+      "sourceType": "github",
+      "computedHash": "77e945a5c26e45b43579785ec306d4f4cae6c2980440e6f237f9c352a8425fd1"
+    }
+  }
+}
