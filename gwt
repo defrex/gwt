@@ -12,6 +12,35 @@ die() { echo "error: $*" >&2; exit 1; }
 info() { echo "$*" >&2; }
 warn() { echo "warning: $*" >&2; }
 
+relative_time() {
+    local epoch=$1
+    local now
+    now=$(date +%s)
+    local diff=$(( now - epoch ))
+
+    if (( diff < 60 )); then
+        echo "just now"
+    elif (( diff < 3600 )); then
+        local m=$(( diff / 60 ))
+        (( m == 1 )) && echo "1 minute ago" || echo "$m minutes ago"
+    elif (( diff < 86400 )); then
+        local h=$(( diff / 3600 ))
+        (( h == 1 )) && echo "1 hour ago" || echo "$h hours ago"
+    elif (( diff < 604800 )); then
+        local d=$(( diff / 86400 ))
+        (( d == 1 )) && echo "yesterday" || echo "$d days ago"
+    elif (( diff < 2592000 )); then
+        local w=$(( diff / 604800 ))
+        (( w == 1 )) && echo "1 week ago" || echo "$w weeks ago"
+    elif (( diff < 31536000 )); then
+        local mo=$(( diff / 2592000 ))
+        (( mo == 1 )) && echo "1 month ago" || echo "$mo months ago"
+    else
+        local y=$(( diff / 31536000 ))
+        (( y == 1 )) && echo "1 year ago" || echo "$y years ago"
+    fi
+}
+
 # --- Git helpers ---
 
 require_git_repo() {
@@ -118,14 +147,45 @@ cmd_ls() {
             cat >&2 <<'EOF'
 Usage: gwt ls
 
-List all worktrees for the current project. Shows the worktree path,
-branch name, and HEAD commit for each.
+List all worktrees for the current project. Shows branch name,
+creation time, and last commit time for each.
 EOF
             return 0
             ;;
     esac
 
-    git worktree list
+    local rows=()
+    local wt_path="" wt_branch=""
+
+    while IFS= read -r line; do
+        if [[ "$line" =~ ^worktree\ (.+) ]]; then
+            wt_path="${BASH_REMATCH[1]}"
+            wt_branch=""
+        elif [[ "$line" =~ ^branch\ refs/heads/(.+) ]]; then
+            wt_branch="${BASH_REMATCH[1]}"
+        elif [[ -z "$line" && -n "$wt_path" ]]; then
+            # End of entry
+            if [[ -z "$wt_branch" ]]; then
+                wt_branch=$(basename "$wt_path")
+            fi
+
+            local created_epoch
+            created_epoch=$(stat -f %B "$wt_path" 2>/dev/null || echo "")
+            local created_rel="unknown"
+            if [[ -n "$created_epoch" && "$created_epoch" != "0" ]]; then
+                created_rel=$(relative_time "$created_epoch")
+            fi
+
+            local commit_rel
+            commit_rel=$(git -C "$wt_path" log -1 --format='%cr' 2>/dev/null || echo "unknown")
+
+            rows+=("${wt_branch}|created ${created_rel}|last commit ${commit_rel}")
+            wt_path=""
+            wt_branch=""
+        fi
+    done < <(git worktree list --porcelain; echo "")
+
+    printf '%s\n' "${rows[@]}" | column -t -s '|'
 }
 
 cmd_rm() {
