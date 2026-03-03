@@ -132,15 +132,26 @@ cmd_rm() {
     case "${1:-}" in
         -h|--help)
             cat >&2 <<'EOF'
-Usage: gwt rm <name>...
+Usage: gwt rm [--force] <name>...
 
 Remove one or more worktrees by branch name. The worktree directory is
 removed and the local branch is deleted if it has been pushed to the remote.
+Use --force to delete the local branch even if not pushed.
 EOF
             return 0
             ;;
-        "") die "branch name required\nUsage: gwt rm <name>..." ;;
+        "") die "branch name required\nUsage: gwt rm [--force] <name>..." ;;
     esac
+
+    local force=false
+    if [ "${1:-}" = "--force" ]; then
+        force=true
+        shift
+    fi
+
+    if [ $# -eq 0 ]; then
+        die "branch name required\nUsage: gwt rm [--force] <name>..."
+    fi
 
     local main_worktree
     main_worktree=$(get_main_worktree)
@@ -161,8 +172,10 @@ EOF
         info "Removing worktree: $worktree_dir"
         git worktree remove "$worktree_dir" --force
 
-        # Only delete local branch if it has been pushed to remote
-        if git ls-remote --heads origin "$branch_name" 2>/dev/null | grep -q "$branch_name"; then
+        if $force; then
+            info "Force-deleting local branch $branch_name"
+            git branch -D "$branch_name" 2>/dev/null || true
+        elif git ls-remote --heads origin "$branch_name" 2>/dev/null | grep -q "$branch_name"; then
             info "Branch $branch_name exists on remote, deleting local branch"
             git branch -d "$branch_name" 2>/dev/null || true
         else
