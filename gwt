@@ -11,6 +11,7 @@ VERSION="1.0.0"
 die() { echo "error: $*" >&2; exit 1; }
 info() { echo "$*" >&2; }
 warn() { echo "warning: $*" >&2; }
+warn_yellow() { echo -e "\033[33mwarning: $*\033[0m" >&2; }
 
 relative_time() {
     local epoch=$1
@@ -113,9 +114,11 @@ EOF
     # Create the worktree
     if git rev-parse --verify "$branch_name" >/dev/null 2>&1; then
         info "Branch '$branch_name' already exists, checking it out in new worktree"
+        warn_yellow "Branch '$branch_name' already exists locally and may not be up to date with $default_branch"
         git worktree add "$worktree_dir" "$branch_name" >&2
     elif git ls-remote --heads origin "$branch_name" 2>/dev/null | grep -q "$branch_name"; then
         info "Branch '$branch_name' exists on remote, fetching and checking out"
+        warn_yellow "Branch '$branch_name' already exists on remote and may not be up to date with $default_branch"
         git fetch origin "$branch_name" >&2
         git worktree add -b "$branch_name" "$worktree_dir" "origin/$branch_name" >&2
     else
